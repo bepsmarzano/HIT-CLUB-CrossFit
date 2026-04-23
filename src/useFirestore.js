@@ -6,7 +6,7 @@ export function useFirestoreCollection(tableName) {
   const [loaded, setLoaded] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const { data: rows, error } = await supabase.from(tableName).select("*");
+    const { data: rows, error } = await supabase.from(tableName).select("*").limit(10000);
     if (error) console.error("Fetch error:", tableName, error.message);
     if (!error && rows) setData(rows);
     setLoaded(true);

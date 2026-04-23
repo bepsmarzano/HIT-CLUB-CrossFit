@@ -1,19 +1,39 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { supabase } from "./firebase.js";
+
+async function fetchAll(tableName) {
+  let all = [];
+  let from = 0;
+  const step = 1000;
+  while (true) {
+    const { data, error } = await supabase.from(tableName).select("*").range(from, from + step - 1);
+    if (error) { console.error("Fetch error:", tableName, error.message); break; }
+    if (!data || data.length === 0) break;
+    all = all.concat(data);
+    if (data.length < step) break;
+    from += step;
+  }
+  return all;
+}
 
 export function useFirestoreCollection(tableName) {
   const [data, setData] = useState([]);
   const [loaded, setLoaded] = useState(false);
+  const lastLocalUpdate = useRef(0);
 
   const fetchData = useCallback(async () => {
-    const { data: rows, error } = await supabase.from(tableName).select("*").limit(10000);
-    if (error) console.error("Fetch error:", tableName, error.message);
-    if (!error && rows) setData(rows);
+    if (Date.now() - lastLocalUpdate.current < 2000) return;
+    const rows = await fetchAll(tableName);
+    setData(rows);
     setLoaded(true);
   }, [tableName]);
 
   useEffect(() => {
-    fetchData();
+    (async () => {
+      const rows = await fetchAll(tableName);
+      setData(rows);
+      setLoaded(true);
+    })();
     const channel = supabase
       .channel(tableName + "_changes")
       .on("postgres_changes", { event: "*", schema: "public", table: tableName }, () => {
@@ -49,6 +69,7 @@ export function useFirestoreCollection(tableName) {
 
   const upsert = useCallback(async (id, item) => {
     const row = toRow(item);
+    lastLocalUpdate.current = Date.now();
     setData(prev => {
       const exists = prev.findIndex(d => d.id === id);
       return exists >= 0
@@ -58,25 +79,30 @@ export function useFirestoreCollection(tableName) {
     const { error } = await supabase.from(tableName).upsert(row);
     if (error) {
       console.error("Upsert error:", tableName, error.message);
+      lastLocalUpdate.current = 0;
       fetchData();
     }
-  }, [tableName, toRow, fromRow, fetchData]);
+  }, [tableName, toRow, fetchData]);
 
   const remove = useCallback(async (id) => {
+    lastLocalUpdate.current = Date.now();
     setData(prev => prev.filter(d => d.id !== id));
     const { error } = await supabase.from(tableName).delete().eq("id", id);
     if (error) {
       console.error("Delete error:", tableName, error.message);
+      lastLocalUpdate.current = 0;
       fetchData();
     }
   }, [tableName, fetchData]);
 
   const batchSet = useCallback(async (items) => {
     const rows = items.map(toRow);
+    lastLocalUpdate.current = Date.now();
     setData(prev => [...prev, ...rows]);
     const { error } = await supabase.from(tableName).upsert(rows);
     if (error) {
       console.error("Batch error:", tableName, error.message);
+      lastLocalUpdate.current = 0;
       fetchData();
     }
   }, [tableName, toRow, fetchData]);
